@@ -1,6 +1,12 @@
 from sklearn.metrics.pairwise import cosine_similarity
 import torch
 
+def get_phobert_embedding(text, model, tokenizer, device):
+    tokens = tokenizer(text, return_tensors="pt", padding=True, max_length=256)
+    tokens = {key: value.to(device) for key, value in tokens.items()}  # Chuyển dữ liệu lên GPU nếu có
+    with torch.no_grad():
+        outputs = model(**tokens)
+    return outputs.last_hidden_state[:, 0, :].squeeze()
 
 def similar_title(m1, m2):
     title_words1 = m1['title'].split()
@@ -40,8 +46,8 @@ def similar_actor(m1, m2):
 
 # Hàm tính độ tương đồng mô tả (chuyển sang PyTorch)
 def similar_describe(m1, m2):
-    vec1 = torch.tensor(m1['embedding_film']).unsqueeze(0)
-    vec2 = torch.tensor(m2['embedding_film']).unsqueeze(0)
+    vec1 = m1['embedding_film']
+    vec2 = m2['embedding_film']
     similarity = torch.nn.functional.cosine_similarity(vec1, vec2).item()
     return similarity
 
@@ -70,5 +76,4 @@ def process_pair(df, pair):
         w_actor * actor_score
     )
 
-    return [movie1['title'], movie2['title'], movie1['describe'],
-            movie2['describe'], round(similarity_score, 2)]
+    return [movie1['describe'], movie2['describe'], round(similarity_score, 2)]

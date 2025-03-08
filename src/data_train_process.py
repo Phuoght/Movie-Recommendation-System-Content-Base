@@ -1,8 +1,10 @@
 import pandas as pd
-from sentence_transformers import SentenceTransformer
 import itertools
 from tqdm import tqdm
 import process_function as pf
+import torch
+from transformers import AutoModel, AutoTokenizer
+
 
 if __name__ == "__main__":
      # Load data
@@ -14,9 +16,13 @@ if __name__ == "__main__":
      df['director'] = df['director'].str.lower()
      df['actor'] = df['actor'].astype(str).str.split(', ').apply(lambda x: set(x))
 
-     # Tải SentenceTransformer lên GPU
-     sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
-     df['embedding_film'] = df['describe'].apply(lambda x: sbert_model.encode(x))
+     # Load Phobert
+     device = "cuda" if torch.cuda.is_available() else "cpu"
+     phobert_model = AutoModel.from_pretrained("vinai/phobert-base").to(device)
+     tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+
+     df['embedding_film'] = df['describe'].apply(lambda x: pf.get_phobert_embedding(x, phobert_model, tokenizer, device))
+
 
      # Tạo cặp phim
      movie_pairs = list(itertools.combinations(df.index, 2))
@@ -24,5 +30,9 @@ if __name__ == "__main__":
      train_data = [pf.process_pair(df, pair) for pair in tqdm(movie_pairs, desc="Processing pairs")]
 
      # Lưu kết quả
-     train_df = pd.DataFrame(train_data, columns=['Movie_1', 'Movie_2', 'Describe_1', 'Describe_2', 'Similarity_score'])
+     train_df = pd.DataFrame(train_data, columns=['Describe_1', 'Describe_2', 'Similarity_score'])
      train_df.to_csv("../data/data_similarity.csv", index=False)
+
+     # Lưu embedding film
+     embeddings = torch.stack(df['embedding_film'].tolist()) 
+     torch.save(embeddings, "embedding_film.pt")
