@@ -1,12 +1,70 @@
 from sklearn.metrics.pairwise import cosine_similarity
 import torch
+from tqdm import tqdm
 
-def get_phobert_embedding(text, model, tokenizer, device):
-    tokens = tokenizer(text, return_tensors="pt", padding=True, max_length=256)
-    tokens = {key: value.to(device) for key, value in tokens.items()}  # Chuyển dữ liệu lên GPU nếu có
-    with torch.no_grad():
-        outputs = model(**tokens)
-    return outputs.last_hidden_state[:, 0, :].squeeze()
+def split_into_chunks(tokens, max_length=256, stride=128):
+    chunks = []
+    for i in range(0, len(tokens), stride):
+        chunk = tokens[i:i + max_length]
+        if len(chunk) > 0:
+            chunks.append(chunk)
+    return chunks
+
+# Hàm trích xuất embedding tối ưu
+def extract_embeddings(texts, tokenizer, model, max_length=256, stride=128, device = 'gpu', batch_size=32):
+    embeddings = []
+    model.to(device)
+    model.eval()
+
+    for i in tqdm(range(0, len(texts), batch_size), desc="Computing embeddings"):
+        batch_texts = texts[i:i + batch_size]
+        batch_chunks = []
+        for text in batch_texts:
+            text = str(text).strip()
+            tokens = tokenizer.encode(text, add_special_tokens=True)
+            chunks = split_into_chunks(tokens, max_length, stride)
+            if not chunks:
+                embeddings.append(torch.zeros(768).to(device))
+                continue
+            batch_chunks.append(chunks)
+
+        # Chuẩn bị input cho batch
+        max_chunks = max(len(chunks) for chunks in batch_chunks)
+        input_ids_batch = []
+        attention_mask_batch = []
+        
+        for chunks in batch_chunks:
+            for chunk in chunks:
+                padded_chunk = chunk + [tokenizer.pad_token_id] * (max_length - len(chunk))
+                attention_mask = [1] * len(chunk) + [0] * (max_length - len(chunk))
+                input_ids_batch.append(padded_chunk)
+                attention_mask_batch.append(attention_mask)
+            # Padding thêm nếu số chunk nhỏ hơn max_chunks
+            for _ in range(max_chunks - len(chunks)):
+                input_ids_batch.append([tokenizer.pad_token_id] * max_length)
+                attention_mask_batch.append([0] * max_length)
+
+        # Chuyển thành tensor
+        input_ids = torch.tensor(input_ids_batch).to(device)
+        attention_mask = torch.tensor(attention_mask_batch).to(device)
+
+        # Trích xuất embedding
+        with torch.no_grad():
+            outputs = model(input_ids, attention_mask=attention_mask)
+            cls_embeddings = outputs.last_hidden_state[:, 0, :]  # [CLS] token
+
+        # Tổng hợp embedding cho từng văn bản
+        start_idx = 0
+        for chunks in batch_chunks:
+            num_chunks = len(chunks)
+            if num_chunks > 0:
+                text_emb = cls_embeddings[start_idx:start_idx + num_chunks].mean(dim=0)
+            else:
+                text_emb = torch.zeros(768).to(device)
+            embeddings.append(text_emb)
+            start_idx += max_chunks
+
+    return embeddings
 
 def similar_title(m1, m2):
     title_words1 = m1['title'].split()
@@ -46,8 +104,8 @@ def similar_actor(m1, m2):
 
 # Hàm tính độ tương đồng mô tả (chuyển sang PyTorch)
 def similar_describe(m1, m2):
-    vec1 = m1['embedding_film']
-    vec2 = m2['embedding_film']
+    vec1 = torch.tensor(m1['embedding_film']).unsqueeze(0)
+    vec2 = torch.tensor(m2['embedding_film']).unsqueeze(0)
     similarity = torch.nn.functional.cosine_similarity(vec1, vec2).item()
     return similarity
 
